@@ -1,3 +1,9 @@
+# PicoPKE
+# File: code.py
+# Author: Aaron Morris / A2ThreeD
+# Date: 2025-05-19
+# Description: Code to play higher quality sound effects out of an I2S amplifier using a RP2040 board and interface to a Spirit PKE Meter prop.
+
 import time
 import board
 import digitalio
@@ -50,13 +56,19 @@ class RandomLED:
     def off(self):
         self.pin.value = False
 
+# LED output pins
 led1 = RandomLED(board.GP5, 1.0)
 led2 = RandomLED(board.GP6, 0.5)
-ledY = RandomLED(board.GP7, 0.5)
-ledR = RandomLED(board.GP8, 0.25)
-ledG = RandomLED(board.GP9, 1.0)
+ledYellow = RandomLED(board.GP7, 0.5)
+ledRed = RandomLED(board.GP8, 0.25)
+ledGreen = RandomLED(board.GP9, 1.0)
+
+# Define pin for outputting to Spirit PKE PCB
 board_pin = digitalio.DigitalInOut(board.GP10)
 board_pin.direction = digitalio.Direction.OUTPUT
+
+# Button Defaults
+btn1_held_time = None
 
 # State constants
 STATE_IDLE = 0
@@ -80,20 +92,21 @@ def play_wav(filename, loop=False):
 
 # Simulate button press action
 def simulate_button_press():
-    print("Initializing Active Search Mode...")
+    print ("Sending button press to Spirit PKE ... ")
     board_pin.value = False
     time.sleep(0.5)
     board_pin.value = True
-    print("Active Search Mode Initialized.")
 
 # Button release handlers
 def btn1_released():
     global current_state
     if current_state == STATE_IDLE:
         current_state = STATE_ACTIVE_1
+        print("Entering Active State 1 ...")
         play_wav(SOUND_FILES["active1"], loop=True)
     else:
         current_state = STATE_IDLE
+        print("Entering Idle State ...")
         play_wav(SOUND_FILES["idle"], loop=True)
     simulate_button_press()
 
@@ -109,14 +122,16 @@ def btn2_released():
         play_wav(SOUND_FILES["active1"], loop=True)
 
 # Initial boot sequence
-print("Initializing Psychokinetic Energy Meter...")
+print("Starting Up PicoPKE ... ")
 board_pin.value = True
-led1.off(); led2.off(); ledY.off(); ledR.off(); ledG.off()
+led1.off(); led2.off(); ledYellow.off(); ledRed.off(); ledGreen.off()
 
+#Play bootup sound and then start with the idling sounds
 play_wav(SOUND_FILES["start"])
 time.sleep(1)
 play_wav(SOUND_FILES["idle"], loop=True)
-print("Boot Sequence Completed.")
+
+print("PKE Meter Booted and Idling")
 
 # Main loop
 while True:
@@ -124,30 +139,50 @@ while True:
     btn2.update()
 
     if btn1.fell:
-        btn1_released()
+        btn1_held_time = time.monotonic()
     if btn2.fell:
         btn2_released()
 
+    #If the left button is held down, mute the audio and go into idle.
+    if btn1.value == False and btn1_held_time is not None:
+        held_duration = time.monotonic() - btn1_held_time
+        if held_duration > 1.0:
+            print("Button 1 held > 1 second. Stopping audio.")
+            audio.stop()
+            current_state = STATE_IDLE
+            btn1_held_time = None
+            # Optionally turn off all LEDs
+            for led in [led1, led2, ledGreen, ledYellow, ledRed]:
+                led.off()
+
+    elif btn1.rose and btn1_held_time is not None:
+        # Only trigger released if held less than 1 sec
+        held_duration = time.monotonic() - btn1_held_time
+        if held_duration <= 1.0:
+            btn1_released()
+        btn1_held_time = None
+
+    #Based on the state buttons, blink different LEDs
     if current_state == STATE_IDLE:
         led1.blink = True
         led2.blink = True
-        ledG.blink = True
-        ledY.blink = True
-        ledR.blink = False
-        led1.update(); led2.update(); ledG.update(); ledY.update(); ledR.off()
+        ledGreen.blink = True
+        ledYellow.blink = True
+        ledRed.blink = False
+        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.off()
     elif current_state == STATE_ACTIVE_1:
         led1.blink = False
         led2.blink = True
-        ledG.blink = False
-        ledY.blink = True
-        ledR.blink = False
-        led1.update(); led2.update(); ledG.update(); ledY.update(); ledR.off()
+        ledGreen.blink = False
+        ledYellow.blink = True
+        ledRed.blink = False
+        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.off()
     elif current_state == STATE_ACTIVE_2:
         led1.blink = False
         led2.blink = False
-        ledG.blink = False
-        ledY.blink = False
-        ledR.blink = True
-        led1.update(); led2.update(); ledG.update(); ledY.update(); ledR.update()
+        ledGreen.blink = False
+        ledYellow.blink = False
+        ledRed.blink = True
+        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.update()
 
     time.sleep(0.01)
