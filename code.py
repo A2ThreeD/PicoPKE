@@ -1,83 +1,64 @@
 # PicoPKE
 # File: code.py
 # Author: Aaron Morris / A2ThreeD
-# Date: 2025-05-19
-# Description: Code to play higher quality sound effects out of an I2S amplifier using a RP2040 board and interface to a Spirit PKE Meter prop.
+# Date: 2025-05-21
+# Version: 1.0
+# Description: CircuitPython code to play higher quality sound effects out of an I2S amplifier using a RP2040 board and interface to a Spirit PKE Meter prop.
 
 import time
 import board
 import digitalio
 import audiocore
 import audiobusio
+import asyncio
 import os
-from adafruit_debouncer import Debouncer
+from adafruit_debouncer import Button
 
 # Define sound files (must be WAV PCM 16-bit Mono 22KHz recommended)
 SOUND_FILES = {
-    "start": "sounds/startup.wav",
-    "idle": "sounds/idle.wav",
-    "active1": "sounds/active1.wav",
-    "active2": "sounds/active2.wav",
+    "start": "sounds/pkestartup.wav",
+    "low": "sounds/pkelow.wav",
+    "medium": "sounds/pkemedium.wav",
+    "high": "sounds/pkehigh.wav",
 }
 
 # Audio setup (I2S)
 audio = audiobusio.I2SOut(board.GP0, board.GP1, board.GP2)
 
 # Button setup
-def make_button(pin):
-    pin_in = digitalio.DigitalInOut(pin)
-    pin_in.direction = digitalio.Direction.INPUT
-    pin_in.pull = digitalio.Pull.UP
-    return Debouncer(pin_in)
+button1_pin = digitalio.DigitalInOut(board.GP3)
+button1_pin.direction = digitalio.Direction.INPUT
+button1_pin.pull = digitalio.Pull.UP
+button1 = Button(button1_pin)
 
-btn1 = make_button(board.GP3)
-btn2 = make_button(board.GP4)
+# Limit switch setup
+llswitch_pin = digitalio.DigitalInOut(board.GP5)
+llswitch_pin.direction = digitalio.Direction.INPUT
+llswitch_pin.pull = digitalio.Pull.UP
+llswitch = Button(llswitch_pin)
 
-# LED setup
-class RandomLED:
-    def __init__(self, pin, interval, blink=True):
-        self.pin = digitalio.DigitalInOut(pin)
-        self.pin.direction = digitalio.Direction.OUTPUT
-        self.interval = interval
-        self.blink = blink
-        self.last_time = time.monotonic()
-        self.state = False
-
-    def update(self):
-        if not self.blink:
-            self.pin.value = True
-            return
-        now = time.monotonic()
-        if now - self.last_time >= self.interval:
-            self.state = not self.state
-            self.pin.value = self.state
-            self.last_time = now
-
-    def off(self):
-        self.pin.value = False
-
-# LED output pins
-led1 = RandomLED(board.GP5, 1.0)
-led2 = RandomLED(board.GP6, 0.5)
-ledYellow = RandomLED(board.GP7, 0.5)
-ledRed = RandomLED(board.GP8, 0.25)
-ledGreen = RandomLED(board.GP9, 1.0)
-
-# Define pin for outputting to Spirit PKE PCB
+# Define pin for outputting button1 pulse to Spirit PKE PCB
 board_pin = digitalio.DigitalInOut(board.GP10)
 board_pin.direction = digitalio.Direction.OUTPUT
+board_pin.value = False
 
-# Button Defaults
-btn1_held_time = None
+# Define pin for outputting limit pulse to Spirit PKE PCB
+lowerlimit_pin = digitalio.DigitalInOut(board.GP11)
+lowerlimit_pin.direction = digitalio.Direction.OUTPUT
+lowerlimit_pin.value = False
 
-# State constants
-STATE_IDLE = 0
-STATE_ACTIVE_1 = 1
-STATE_ACTIVE_2 = 2
-current_state = STATE_IDLE
+# Define state variables to track the different modes/sounds
+STATE_BOOTING = 0
+STATE_BOOTED = 1
+STATE_LOW = 2
+STATE_MEDIUM = 3
+STATE_HIGH = 4
+STATE_MUTE = 5
 
-# Helper: Play WAV file
-def play_wav(filename, loop=False):
+#Default state should be set to STATE_BOOTING
+current_state = STATE_BOOTING
+
+async def play_wav(filename, loop=False):
     try:
         wave_file = open(filename, "rb")
         wave = audiocore.WaveFile(wave_file)
@@ -86,103 +67,79 @@ def play_wav(filename, loop=False):
         else:
             audio.play(wave)
             while audio.playing:
-                time.sleep(0.1)
+                await asyncio.sleep(0.05)
     except Exception as e:
         print("Audio error:", e)
 
-# Simulate button press action
-def simulate_button_press():
+def send_button_press():
     print ("Sending button press to Spirit PKE ... ")
-    board_pin.value = False
-    time.sleep(0.5)
+
+    #Create a 250ms pulse to tell the Spirit PKE PCB that the left button was pressed
     board_pin.value = True
+    time.sleep(0.25)
+    board_pin.value = False
 
-# Button release handlers
-def btn1_released():
+async def short_press():
     global current_state
-    if current_state == STATE_IDLE:
-        current_state = STATE_ACTIVE_1
-        print("Entering Active State 1 ...")
-        play_wav(SOUND_FILES["active1"], loop=True)
-    else:
-        current_state = STATE_IDLE
-        print("Entering Idle State ...")
-        play_wav(SOUND_FILES["idle"], loop=True)
-    simulate_button_press()
+    print("Short press detected!")
 
-def btn2_released():
+    #If this is a button press when the wings are down, change the state and play the medium speed scanning sound.
+    if current_state == STATE_BOOTED:
+        await play_wav(SOUND_FILES["medium"], loop=True)
+        current_state = STATE_MEDIUM
+
+    #Send the button pulse to the Spirit PKE PCB
+    send_button_press()
+
+async def long_press():
+    print("Long press detected!")
+
     global current_state
-    if current_state == STATE_IDLE:
-        return
-    if current_state == STATE_ACTIVE_1:
-        current_state = STATE_ACTIVE_2
-        play_wav(SOUND_FILES["active2"], loop=True)
-    elif current_state == STATE_ACTIVE_2:
-        current_state = STATE_ACTIVE_1
-        play_wav(SOUND_FILES["active1"], loop=True)
+    if current_state == STATE_LOW:
+        current_state = STATE_MEDIUM
+        print("Medium Speed ...")
+        await play_wav(SOUND_FILES["medium"], loop=True)
+    elif current_state == STATE_MEDIUM:
+        current_state = STATE_HIGH
+        print("High Speed...")
+        await play_wav(SOUND_FILES["high"], loop=True)
+    elif current_state == STATE_HIGH:
+        current_state = STATE_LOW
+        print("Low Speed...")
+        await play_wav(SOUND_FILES["low"], loop=True)
 
-# Initial boot sequence
-print("Starting Up PicoPKE ... ")
-board_pin.value = True
-led1.off(); led2.off(); ledYellow.off(); ledRed.off(); ledGreen.off()
+async def main_loop():
+    global current_state
+    print("Starting Up PicoPKE ... ")
+    await play_wav(SOUND_FILES["start"])
+    print("PKE Meter Booted")
+    current_state = STATE_BOOTED
 
-#Play bootup sound and then start with the idling sounds
-play_wav(SOUND_FILES["start"])
-time.sleep(1)
-play_wav(SOUND_FILES["idle"], loop=True)
+    while True:
 
-print("PKE Meter Booted and Idling")
+        #Get the status of the buttons and limit switches
+        button1.update()
+        llswitch.update()
 
-# Main loop
-while True:
-    btn1.update()
-    btn2.update()
+        #If the left button is pressed, determine if it's long or short and change the sounds appropriately.
+        if button1.long_press:
+            await long_press()
+        if button1.short_count !=0:
+            await short_press()
 
-    if btn1.fell:
-        btn1_held_time = time.monotonic()
-    if btn2.fell:
-        btn2_released()
+        if llswitch.value:
+            #print('Lower motor limit not triggered - Wings up')
+            lowerlimit_pin.value = False
+        else:
+            lowerlimit_pin.value = True
 
-    #If the left button is held down, mute the audio and go into idle.
-    if btn1.value == False and btn1_held_time is not None:
-        held_duration = time.monotonic() - btn1_held_time
-        if held_duration > 1.0:
-            print("Button 1 held > 1 second. Stopping audio.")
-            audio.stop()
-            current_state = STATE_IDLE
-            btn1_held_time = None
-            # Optionally turn off all LEDs
-            for led in [led1, led2, ledGreen, ledYellow, ledRed]:
-                led.off()
+            #Only stop the audio and reset the state if the lower limit switch was just pressed
+            if llswitch.fell:
+                print('Lower motor limit triggered - Wings are down')
+                audio.stop()
+                current_state = STATE_BOOTED
 
-    elif btn1.rose and btn1_held_time is not None:
-        # Only trigger released if held less than 1 sec
-        held_duration = time.monotonic() - btn1_held_time
-        if held_duration <= 1.0:
-            btn1_released()
-        btn1_held_time = None
 
-    #Based on the state buttons, blink different LEDs
-    if current_state == STATE_IDLE:
-        led1.blink = True
-        led2.blink = True
-        ledGreen.blink = True
-        ledYellow.blink = True
-        ledRed.blink = False
-        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.off()
-    elif current_state == STATE_ACTIVE_1:
-        led1.blink = False
-        led2.blink = True
-        ledGreen.blink = False
-        ledYellow.blink = True
-        ledRed.blink = False
-        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.off()
-    elif current_state == STATE_ACTIVE_2:
-        led1.blink = False
-        led2.blink = False
-        ledGreen.blink = False
-        ledYellow.blink = False
-        ledRed.blink = True
-        led1.update(); led2.update(); ledGreen.update(); ledYellow.update(); ledRed.update()
+        await asyncio.sleep(0.01)  # small yield
 
-    time.sleep(0.01)
+asyncio.run(main_loop())
