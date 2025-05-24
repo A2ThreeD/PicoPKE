@@ -32,9 +32,9 @@ button1_pin.pull = digitalio.Pull.UP
 button1 = Button(button1_pin)
 
 # Limit switch setup
-llswitch_pin = digitalio.DigitalInOut(board.GP5)
+llswitch_pin = digitalio.DigitalInOut(board.GP11)
 llswitch_pin.direction = digitalio.Direction.INPUT
-llswitch_pin.pull = digitalio.Pull.UP
+llswitch_pin.pull = digitalio.Pull.DOWN
 llswitch = Button(llswitch_pin)
 
 # Define pin for outputting button1 pulse to Spirit PKE PCB
@@ -42,10 +42,6 @@ board_pin = digitalio.DigitalInOut(board.GP10)
 board_pin.direction = digitalio.Direction.OUTPUT
 board_pin.value = False
 
-# Define pin for outputting limit pulse to Spirit PKE PCB
-lowerlimit_pin = digitalio.DigitalInOut(board.GP11)
-lowerlimit_pin.direction = digitalio.Direction.OUTPUT
-lowerlimit_pin.value = False
 
 # Define state variables to track the different modes/sounds
 STATE_BOOTING = 0
@@ -127,14 +123,8 @@ async def main_loop():
         if button1.short_count !=0:
             await short_press()
 
-        if llswitch.value:
-            #print('Lower motor limit not triggered - Wings up')
-            lowerlimit_pin.value = False
-        else:
-            lowerlimit_pin.value = True
-
             #Only stop the audio and reset the state if the lower limit switch was just pressed
-            if llswitch.fell:
+            if llswitch.rose:
                 print('Lower motor limit triggered - Wings are down')
                 audio.stop()
                 current_state = STATE_BOOTED
